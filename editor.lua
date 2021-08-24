@@ -5,10 +5,42 @@ local os = require("os")
 
 local gpu = component.gpu
 
+-- CONFIGURATION VALUES
 local BUFFER_SIZE_MAX = 16384   -- Maximum number of bytes that can be kept in memory for an editor (Minimum is 1, Maximum is UNKNOWN!)
-local editors = {}              -- A list of editors (open documents)
+local UI_BG = 0x1f1f1f
+local UI_FG = 0xdfdfdf
 
+
+local editors = {}              -- A list of editors (open documents)
+local frameCounter = 0
+local S_WIDTH, S_HEIGHT = gpu.getResolution()
 RUNNING = true                  -- A global variable that determines whether the main loop of the program should repeat. Global due to how keybinds are implemented
+
+local keystates = {}
+local function keybinds(editorIDX)
+    local editor = editors[editorIDX]
+    if keystates[16] and keystates[29] then RUNNING = false -- If Ctrl + Q then Close Application
+    -- A Not Very Elegant Solution To The Cursor Moving Too Fast (Simulating a frame limit) I Reccomend 1 or 2 
+    elseif frameCounter % 1 == 0 then
+        -- Moves Cursor Position According To What Key Is Pressed, Also Updates The Previous Position
+        if keystates[200] then  -- Up Arrow
+            editor.prevY    = editor.cursor.y
+            editor.cursor.y = editor.cursor.y - 1
+        elseif keystates[208] then  -- Down Arrow
+            editor.prevY    = editor.cursor.y
+            editor.cursor.y = editor.cursor.y + 1
+        elseif keystates[205] then  -- Right Arrow
+            editor.prevX    = editor.cursor.x
+            editor.cursor.x = editor.cursor.x + 1
+        elseif keystates[203] then  -- Left Arrow
+            editor.prevX    = editor.cursor.x
+            editor.cursor.x = editor.cursor.x - 1
+        end
+    else end
+end
+
+
+
 
 -- pads a string to a fixed length
 local function padString(src, len, pad)
@@ -54,7 +86,7 @@ local function updateBuffer(filehandle, cursor, offsetY)
         elseif not (d == nil) then  -- If the character is valid and not a newline, it appends it to the buffer
             buffer[bufIDX] = buffer[bufIDX] .. d
         end
-
+        buffer.len = bufIDX
     until (d == nil) or (datLen >= BUFFER_SIZE_MAX)
 
     return buffer
@@ -70,6 +102,8 @@ local function createEditor(filepath)
     editor.cursor.prevY    = 1
     editor.cursor.x        = 1
     editor.cursor.y        = 1
+    editor.cursor.xSel     = 0
+    editor.cursor.ySel     = 0
     editor.cursor.offsetX  = 1
     editor.cursor.offsetY  = 1
     
@@ -90,8 +124,8 @@ local function createEditor(filepath)
     _,editor.height        = gpu.getResolution()
     editor.width           = editor.width
     editor.height          = editor.height - 2
-    editor.offsetX         = 1
-    editor.offsetY         = 3
+    editor.offsetX         = 4
+    editor.offsetY         = 2
 
 
     table.insert(editors, editor)
@@ -99,14 +133,18 @@ end
 
 local function scratchRenderEditor(idx)
     local editor = editors[idx]
-
+    gpu.setBackground(UI_BG)
+    gpu.fill(1, 1, S_WIDTH, S_HEIGHT, " ")
     gpu.setForeground(editor.fg)
     gpu.setBackground(editor.bg)
-
+    gpu.fill(1+editor.offsetX, 1+editor.offsetY, editor.width, editor.height-editor.offsetY, " ")
     -- Render text while respecting the editor position
     for i=1,editor.height,1 do
         if editor.buffer[i] then    -- Makes sure there is a value to render
-            gpu.set(1+editor.offsetX, i+editor.offsetY, editor.buffer[i])
+            local cx,cy = 1+editor.offsetX, i+editor.offsetY
+            if cx > 0 and cy > 0 and cx <= editor.width and cy <= editor.height then
+                gpu.set(cx, cy, editor.buffer[i])
+            end
         end
     end
 
@@ -114,39 +152,39 @@ local function scratchRenderEditor(idx)
         gpu.setForeground(editor.cursor.fg) 
         gpu.setBackground(editor.cursor.bg)
 
-        local cx, cy = math.min(editor.cursor.x, editor.width)+editor.offsetX, math.min(editor.cursor.y, editor.height+editor.offsetY)
-        local c, _, _ = gpu.get(cx, cy)
-        gpu.set(cx, cy, c) -- Changes the color of the pixel at the cursors position
-
+        for i=0,math.min(editor.cursor.ySel, editor.height),1 do
+            for j=0,math.min(editor.cursor.xSel, editor.width),1 do
+                local cx, cy = math.min(editor.cursor.x+j, editor.width)+editor.offsetX, math.min(editor.cursor.y+i, editor.height)+editor.offsetY
+                if cx > editor.offsetX and cy > editor.offsetY and cx <= editor.width and cy <= editor.height then -- Check to make sure its in bounds
+                    local c, _, _ = gpu.get(cx, cy)
+                    gpu.set(cx, cy, c) -- Changes the color of the pixel at the cursors position
+                end
+            end
+        end
+        
         -- Reset colors
         gpu.setForeground(editor.fg)
         gpu.setBackground(editor.bg)
     end
 end
 
-createEditor("/home/editor.lua")
-scratchRenderEditor(1)
-os.sleep(3)
+local function renderUI(idx)
 
-
+end
 -- Encased To Prevent Polluting This Files Namespace
 do
-    local function renderUI()
-
-    end
-
-
     -- Event Listeners
     local function onClick(_, _, x, y, button, _)
 
     end
 
     local function onKeyDown(_, _, _, code, _)
-
+        keystates[code] = true
+        print("Key With Code: " .. code)
     end
 
     local function onKeyUp(_, _, _, code, _)
-
+        keystates[code] = false
     end
 
     local function onDrag(_, _, x, y, button, _)
@@ -177,9 +215,17 @@ do
         handles.scroll = event.listen("scroll", onScroll)
         handles.clipboard = event.listen("clipboard", onClipboard)
 
+        
         -- Main Loop For Program
+        local editorIDX = 1
+        createEditor("/home/editor.lua")
+        scratchRenderEditor(editorIDX)
         while RUNNING do
-            
+            os.sleep()
+            -- Checks and Updates When Keys Are Pressed
+            keybinds(editorIDX)
+            scratchRenderEditor(editorIDX)
+            frameCounter = frameCounter + 1
         end
 
         -- De-Register Events
